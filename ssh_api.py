@@ -51,6 +51,7 @@ def execute_huawei_command(host, port, username, password, command):
             pass
 
         # 2) Envia o comando principal que queremos executar
+        channel.send('screen-length 0 temporary' + '\n')
         channel.send(command + '\n')
         time.sleep(2) # Aumenta a espera para comandos que demoram mais para executar
 
