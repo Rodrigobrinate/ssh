@@ -150,4 +150,4 @@ def handle_execute():
 if __name__ == '__main__':
     # Roda o servidor na porta 5000, acessível por qualquer IP da máquina
     # ATENÇÃO: debug=True não deve ser usado em produção!
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5500, debug=True)
