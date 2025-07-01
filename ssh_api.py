@@ -65,6 +65,7 @@ def execute_huawei_command(host, port, username, password, command):
                 
                 decoded_chunk = chunk.decode('utf-8', errors='ignore')
                 output += decoded_chunk
+                print(output)
                 logging.info(f"Recebido chunk: {decoded_chunk.strip()}")
 
                 # <-- MUDANÇA: Condição de parada mais flexível e robusta
