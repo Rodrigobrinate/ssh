@@ -141,6 +141,7 @@ def handle_execute():
 
     try:
         command_output = execute_huawei_command(host, port, username, password, command)
+        time.sleep(20)
         return jsonify({
             "status": "success",
             "host": host,
