@@ -20,7 +20,7 @@ RUN pip install --no-cache-dir --trusted-host pypi.python.org -r requirements.tx
 
 # --- Estágio 4: Copiar o código da aplicação ---
 # Copia o script da sua API para o diretório de trabalho no contêiner.
-COPY ssh.py .
+COPY ssh_api.py .
 
 # --- Estágio 5: Definir o comando de execução ---
 # Expõe a porta 5000, que é a porta que o Gunicorn usará.
