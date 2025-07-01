@@ -1,22 +1,25 @@
 #!/usr/bin/env python3
 import paramiko
-import time
-import socket
 import logging
 from flask import Flask, request, jsonify
 
 # Configuração básica de logging para ver a saída no Docker
+# O logging ajuda a depurar problemas de conexão e execução.
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def execute_huawei_command(host, port, username, password, command):
     """
-    Conecta a um dispositivo Huawei via SSH, executa um comando e retorna o resultado.
+    Conecta-se a um dispositivo Huawei via SSH usando exec_command, executa um comando
+    e retorna o resultado de forma limpa e robusta.
+
+    Este método é preferível ao invoke_shell para a execução de comandos únicos,
+    pois é menos propenso a erros de timing e parsing de prompt.
     """
     client = None
     try:
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        
+
         logging.info(f"Conectando a {host}:{port}...")
         client.connect(
             hostname=host,
@@ -25,99 +28,64 @@ def execute_huawei_command(host, port, username, password, command):
             password=password,
             look_for_keys=False,
             allow_agent=False,
-            banner_timeout=200,
-            timeout=20
+            timeout=20  # Timeout para a conexão inicial
         )
-        logging.info("Conexão bem-sucedida.")
+        logging.info("Conexão SSH bem-sucedida.")
 
-        channel = client.invoke_shell()
-        channel.settimeout(10.0)
+        # Combina o comando de desabilitar paginação com o comando real.
+        # Isso garante que a saída completa seja recebida.
+        full_command = f"screen-length 0 temporary\n{command}\n"
 
-        # 1. Limpar o buffer inicial (banner e primeiro prompt)
-        logging.info("Limpando buffer inicial...")
-        time.sleep(1)
-        try:
-            initial_buffer = channel.recv(65535).decode('utf-8', errors='ignore')
-            logging.info(f"Buffer inicial recebido:\n---\n{initial_buffer}\n---")
-        except socket.timeout:
-            logging.warning("Timeout ao limpar buffer inicial (normal se não houver banner).")
+        logging.info(f"Executando comando: '{command}'")
+        # Usar exec_command é mais simples e robusto para comandos não-interativos.
+        # Ele retorna stdin, stdout, e stderr diretamente.
+        stdin, stdout, stderr = client.exec_command(full_command, timeout=30) # Timeout para a execução do comando
 
-        # 2. Desabilitar paginação
-        logging.info("Desabilitando paginação...")
-        channel.send('screen-length 0 temporary\n')
-        time.sleep(0.5)
-        try:
-            channel.recv(65535) # Limpa a resposta do comando de paginação
-        except socket.timeout:
-            pass
+        # Lê a saída padrão (stdout) e a saída de erro (stderr)
+        output = stdout.read().decode('utf-8', errors='ignore')
+        error_output = stderr.read().decode('utf-8', errors='ignore')
 
-        # 3. Enviar o comando principal
-        logging.info(f"Enviando comando: '{command}'")
-        channel.send(command + '\n')
+        # Verifica se houve algum erro na execução do comando
+        if error_output:
+            # Muitos dispositivos enviam avisos inofensivos para stderr, mas é bom registrar.
+            logging.warning(f"Recebida saída de erro (stderr) de {host}: {error_output.strip()}")
+            # Dependendo do caso, você pode querer tratar isso como um erro fatal:
+            # raise Exception(f"Erro na execução do comando: {error_output.strip()}")
 
-        # 4. Ler a saída até que o prompt do switch apareça novamente
-        output = ""
-        while True:
-            try:
-                chunk = channel.recv(4096) # Lê em pedaços menores
-                if not chunk:
-                    break
-                
-                decoded_chunk = chunk.decode('utf-8', errors='ignore')
-                output += decoded_chunk
-                print(output)
-                logging.info(f"Recebido chunk: {decoded_chunk.strip()}")
-
-                # <-- MUDANÇA: Condição de parada mais flexível e robusta
-                # Verifica se o prompt ('>' ou '#') está na última linha recebida.
-                # Isso funciona mesmo que haja espaços ou outros caracteres depois do prompt.
-                last_line = decoded_chunk.strip().splitlines()[-1] if decoded_chunk.strip() else ""
-                if '>' in last_line or '#' in last_line:
-                    logging.info(f"Prompt detectado em '{last_line}'. Finalizando a leitura.")
-                    break
-            except socket.timeout:
-                logging.warning("Timeout na leitura do canal. Assumindo que o comando terminou.")
-                break
-        
-        logging.info("Leitura da saída finalizada.")
-        channel.send('quit\n') # Envia quit após a leitura
-
-        # 5. Limpeza da saída para remover o comando ecoado e o prompt final
+        # A saída de stdout de exec_command já é limpa (sem prompt ou eco de comando).
+        # No entanto, a saída do comando 'screen-length' pode aparecer. Vamos removê-la.
+        # Isso torna o código mais limpo que a versão original.
         lines = output.splitlines()
-        
-        # Encontra a linha onde o comando foi ecoado para começar a limpeza a partir dela
         command_line_index = -1
         for i, line in enumerate(lines):
+            # Encontra a linha onde o comando principal foi ecoado
             if command in line:
                 command_line_index = i
                 break
-        
-        if command_line_index != -1 and len(lines) > command_line_index + 1:
-            # Pega as linhas entre o eco do comando e o prompt final
-            clean_lines = lines[command_line_index + 1:-1]
-            clean_output = "\n".join(clean_lines).strip()
-        else:
-            clean_output = "" # Retorna vazio se a saída não for como esperado
 
-        logging.info(f"Saída final limpa:\n---\n{clean_output}\n---")
+        if command_line_index != -1:
+            # Retorna tudo que veio depois da linha do comando
+            clean_output = "\n".join(lines[command_line_index + 1:]).strip()
+        else:
+            # Se não encontrar o eco do comando, retorna a saída como está,
+            # removendo o comando de paginação se ele estiver lá.
+            clean_output = output.replace('screen-length 0 temporary', '').strip()
+
+        logging.info(f"Saída final limpa recebida de {host}:\n---\n{clean_output}\n---")
         return clean_output
 
     except paramiko.AuthenticationException:
-        logging.error("Erro de autenticação.")
+        logging.error(f"Erro de autenticação para o host {host}.")
+        # Propaga a exceção para ser tratada pela API Flask
         raise Exception("Erro de autenticação. Verifique usuário e senha.")
-    except paramiko.SSHException as ssh_err:
-        logging.error(f"Erro no SSH: {ssh_err}")
-        raise Exception(f"Erro no SSH: {ssh_err}")
-    except socket.error as sock_err:
-        logging.error(f"Erro de conexão (socket): {sock_err}")
-        raise Exception(f"Erro de conexão (socket): {sock_err}")
     except Exception as e:
-        logging.error(f"Um erro inesperado ocorreu: {e}", exc_info=True)
-        raise Exception(f"Um erro inesperado ocorreu: {e}")
+        logging.error(f"Um erro ocorreu ao conectar ou executar o comando em {host}: {e}", exc_info=True)
+        # Propaga a exceção com uma mensagem clara
+        raise Exception(f"Erro na operação SSH em {host}: {e}")
     finally:
         if client:
             client.close()
-            logging.info("Conexão SSH fechada.")
+            logging.info(f"Conexão SSH com {host} fechada.")
 
 
 # --- Configuração da API com Flask ---
@@ -125,23 +93,26 @@ app = Flask(__name__)
 
 @app.route('/execute', methods=['POST'])
 def handle_execute():
+    """
+    Endpoint da API para receber os detalhes da conexão e o comando a ser executado.
+    """
     data = request.get_json()
     if not data:
-        return jsonify({"error": "Payload da requisição deve ser em formato JSON."}), 400
+        return jsonify({"status": "error", "message": "Payload da requisição deve ser em formato JSON."}), 400
 
     required_fields = ['host', 'username', 'password', 'command']
-    if not all(field in data for field in required_fields):
-        return jsonify({"error": f"Campos obrigatórios ausentes. É preciso ter: {required_fields}"}), 400
+    missing_fields = [field for field in required_fields if field not in data]
+    if missing_fields:
+        return jsonify({"status": "error", "message": f"Campos obrigatórios ausentes: {', '.join(missing_fields)}"}), 400
 
     host = data['host']
     username = data['username']
     password = data['password']
     command = data['command']
-    port = data.get('port', 22)
+    port = data.get('port', 22) # Usa a porta 22 como padrão
 
     try:
         command_output = execute_huawei_command(host, port, username, password, command)
-        time.sleep(20)
         return jsonify({
             "status": "success",
             "host": host,
@@ -149,12 +120,15 @@ def handle_execute():
             "output": command_output
         })
     except Exception as e:
+        # Retorna um erro 500 (Internal Server Error) se a função SSH falhar
         return jsonify({
             "status": "error",
             "host": host,
+            "command": command,
             "message": str(e)
         }), 500
 
-```
-
-Por favor, atualize seu arquivo `ssh_api.py`, reconstrua a imagem e teste novamente. Se o problema persistir, os logs do `docker logs` que você coletar serão a chave para resolvermos de v
+# Se este script for executado diretamente, inicie o servidor Flask.
+# Em produção, use um servidor WSGI como Gunicorn.
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5500, debug=True)
