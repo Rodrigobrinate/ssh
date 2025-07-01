@@ -94,7 +94,7 @@ def handle_execute():
 
     try:
         command_output = teste(host, username, password, command)
-        sleep.time(100)
+        sleep.time(100000)
         return jsonify({
             "status": "success",
             "host": host,
