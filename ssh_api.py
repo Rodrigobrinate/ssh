@@ -9,16 +9,6 @@ import re
 from flask import Flask, request, jsonify
 
 def teste(host, username, password, command):
-    parser = argparse.ArgumentParser(
-        description='Executa um comando em um switch Huawei via SSH usando um shell interativo'
-    )
-    parser.add_argument('--host',     required=True, help='IP ou hostname do switch')
-    parser.add_argument('--port',     type=int, default=22, help='Porta SSH (padrão: 22)')
-    parser.add_argument('--username', required=True, help='Usuário SSH')
-    parser.add_argument('--password', required=True, help='Senha SSH')
-    parser.add_argument('--command',  required=True, help='Comando a executar')
-    args = parser.parse_args()
-
     # Cria o cliente SSH e aceita hosts desconhecidos
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -72,6 +62,7 @@ def teste(host, username, password, command):
             else:
                 # se saiu do shell, devemos ver exit_status
                 if channel.exit_status_ready():
+                    return output
                     break
                 time.sleep(0.1)
         except socket.timeout:
